@@ -1,22 +1,23 @@
 name: Publish v1.0.0
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/release.yml'
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   release:
+    if: github.event.issue.title == 'Publish LayoutFixer v1.0.0'
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Setup Go
@@ -24,14 +25,18 @@ jobs:
         with:
           go-version: '1.24.x'
 
-      - name: Reconstruct source
+      - name: Reconstruct and verify source
         shell: pwsh
         run: |
           $parts = 1..5 | ForEach-Object { Get-Content -Raw ("build_src/main.b64.{0:D2}" -f $_) }
           $b64 = ($parts -join '').Trim()
           [IO.File]::WriteAllBytes('main.go', [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash main.go -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne '961c01ba7404759a6076a464b40f3e26e884fe967ba865b38e3ec96a10d75c78') {
+            throw "Source hash mismatch: $hash"
+          }
 
-      - name: Generate LayoutFixer icon
+      - name: Generate application icon
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Drawing
@@ -57,27 +62,31 @@ jobs:
           $fs.Close()
           $g.Dispose(); $bmp.Dispose(); $font.Dispose(); $pen.Dispose()
 
-      - name: Embed Windows icon and build
+      - name: Build Windows x64 executable
         shell: pwsh
         run: |
+          if (-not (Test-Path go.mod)) { go mod init github.com/rhipex/LayoutFixer }
           go install github.com/akavel/rsrc@latest
           & "$env:USERPROFILE\go\bin\rsrc.exe" -ico layoutfixer.ico -o rsrc.syso
-          go build -trimpath -ldflags "-H=windowsgui -s -w" -o LayoutFixer.exe main.go
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o LayoutFixer.exe .
 
-      - name: Update checksum
+      - name: Write checksum
         shell: pwsh
         run: |
           $hash = (Get-FileHash LayoutFixer.exe -Algorithm SHA256).Hash.ToLower()
           Set-Content -NoNewline SHA256SUMS.txt "$hash  LayoutFixer.exe"
 
-      - name: Commit final source and executable
+      - name: Commit final repository contents
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm -r build_src
-          git add main.go layoutfixer.ico LayoutFixer.exe SHA256SUMS.txt
-          git commit -m "Finalize LayoutFixer v1.0.0 [release-bot]"
+          git rm .github/workflows/release.yml
+          git add main.go layoutfixer.ico LayoutFixer.exe SHA256SUMS.txt go.mod rsrc.syso
+          git commit -m "Finalize LayoutFixer v1.0.0"
           git push origin main
 
       - name: Tag v1.0.0
@@ -92,3 +101,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create v1.0.0 LayoutFixer.exe SHA256SUMS.txt --title "LayoutFixer v1.0.0" --notes-file RELEASE_NOTES_v1.0.0.md
+
+      - name: Close trigger issue
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue close ${{ github.event.issue.number }} --comment "v1.0.0 publication workflow completed."
