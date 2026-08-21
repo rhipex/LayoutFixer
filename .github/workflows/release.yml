@@ -1,0 +1,94 @@
+name: Publish v1.0.0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Reconstruct source
+        shell: pwsh
+        run: |
+          $parts = 1..5 | ForEach-Object { Get-Content -Raw ("build_src/main.b64.{0:D2}" -f $_) }
+          $b64 = ($parts -join '').Trim()
+          [IO.File]::WriteAllBytes('main.go', [Convert]::FromBase64String($b64))
+
+      - name: Generate LayoutFixer icon
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          $bmp = New-Object System.Drawing.Bitmap 64,64
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+          $g.Clear([System.Drawing.Color]::FromArgb(34,34,34))
+          $font = New-Object System.Drawing.Font('Segoe UI',18,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel)
+          $brush = [System.Drawing.Brushes]::White
+          $g.DrawString('A', $font, $brush, 5, 6)
+          $g.DrawString('Я', $font, $brush, 40, 36)
+          $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::White,2)
+          $g.DrawLine($pen,22,24,44,24)
+          $g.DrawLine($pen,40,20,44,24)
+          $g.DrawLine($pen,40,28,44,24)
+          $g.DrawLine($pen,42,39,20,39)
+          $g.DrawLine($pen,24,35,20,39)
+          $g.DrawLine($pen,24,43,20,39)
+          $hIcon = $bmp.GetHicon()
+          $icon = [System.Drawing.Icon]::FromHandle($hIcon)
+          $fs = [IO.File]::Open('layoutfixer.ico',[IO.FileMode]::Create)
+          $icon.Save($fs)
+          $fs.Close()
+          $g.Dispose(); $bmp.Dispose(); $font.Dispose(); $pen.Dispose()
+
+      - name: Embed Windows icon and build
+        shell: pwsh
+        run: |
+          go install github.com/akavel/rsrc@latest
+          & "$env:USERPROFILE\go\bin\rsrc.exe" -ico layoutfixer.ico -o rsrc.syso
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o LayoutFixer.exe main.go
+
+      - name: Update checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash LayoutFixer.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -NoNewline SHA256SUMS.txt "$hash  LayoutFixer.exe"
+
+      - name: Commit final source and executable
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -r build_src
+          git add main.go layoutfixer.ico LayoutFixer.exe SHA256SUMS.txt
+          git commit -m "Finalize LayoutFixer v1.0.0 [release-bot]"
+          git push origin main
+
+      - name: Tag v1.0.0
+        shell: pwsh
+        run: |
+          git tag -a v1.0.0 -m "LayoutFixer v1.0.0"
+          git push origin v1.0.0
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.0.0 LayoutFixer.exe SHA256SUMS.txt --title "LayoutFixer v1.0.0" --notes-file RELEASE_NOTES_v1.0.0.md
