@@ -1,12 +1,11 @@
-name: Publish v1.0.0
+name: Verify and publish v1.0.0
 
 on:
   pull_request:
-    types: [opened]
+    types: [synchronize]
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   release:
@@ -20,75 +19,33 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24.x'
-
-      - name: Reconstruct and verify source
+      - name: Verify source and executable
         shell: pwsh
         run: |
-          $parts = 1..5 | ForEach-Object { Get-Content -Raw ("build_src/main.b64.{0:D2}" -f $_) }
-          $b64 = ($parts -join '').Trim()
-          [IO.File]::WriteAllBytes('main.go', [Convert]::FromBase64String($b64))
-          $hash = (Get-FileHash main.go -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne '961c01ba7404759a6076a464b40f3e26e884fe967ba865b38e3ec96a10d75c78') { throw "Source hash mismatch: $hash" }
+          $sourceHash = (Get-FileHash main.go -Algorithm SHA256).Hash.ToLower()
+          if ($sourceHash -ne '961c01ba7404759a6076a464b40f3e26e884fe967ba865b38e3ec96a10d75c78') { throw "Unexpected source hash: $sourceHash" }
+          if (-not (Test-Path LayoutFixer.exe)) { throw 'LayoutFixer.exe is missing' }
+          $exeHash = (Get-FileHash LayoutFixer.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content SHA256SUMS.txt "$exeHash  LayoutFixer.exe"
+          Write-Host "LayoutFixer.exe SHA256: $exeHash"
 
-      - name: Generate application icon
+      - name: Ensure v1.0.0 release and assets
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          Add-Type -AssemblyName System.Drawing
-          $bmp = New-Object System.Drawing.Bitmap 64,64
-          $g = [System.Drawing.Graphics]::FromImage($bmp)
-          $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-          $g.Clear([System.Drawing.Color]::FromArgb(34,34,34))
-          $font = New-Object System.Drawing.Font('Segoe UI',18,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel)
-          $brush = [System.Drawing.Brushes]::White
-          $g.DrawString('A', $font, $brush, 5, 6)
-          $g.DrawString('Я', $font, $brush, 40, 36)
-          $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::White,2)
-          $g.DrawLine($pen,22,24,44,24); $g.DrawLine($pen,40,20,44,24); $g.DrawLine($pen,40,28,44,24)
-          $g.DrawLine($pen,42,39,20,39); $g.DrawLine($pen,24,35,20,39); $g.DrawLine($pen,24,43,20,39)
-          $hIcon = $bmp.GetHicon()
-          $icon = [System.Drawing.Icon]::FromHandle($hIcon)
-          $fs = [IO.File]::Open('layoutfixer.ico',[IO.FileMode]::Create)
-          $icon.Save($fs); $fs.Close()
-          $g.Dispose(); $bmp.Dispose(); $font.Dispose(); $pen.Dispose()
+          gh release view v1.0.0 *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create v1.0.0 --title "LayoutFixer v1.0.0" --notes-file RELEASE_NOTES_v1.0.0.md
+          }
+          gh release upload v1.0.0 LayoutFixer.exe SHA256SUMS.txt --clobber
 
-      - name: Build Windows x64 executable
-        shell: pwsh
-        run: |
-          if (-not (Test-Path go.mod)) { go mod init github.com/rhipex/LayoutFixer }
-          go install github.com/akavel/rsrc@latest
-          & "$env:USERPROFILE\go\bin\rsrc.exe" -ico layoutfixer.ico -o rsrc.syso
-          $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
-          go build -trimpath -ldflags "-H=windowsgui -s -w" -o LayoutFixer.exe .
-
-      - name: Write checksum
-        shell: pwsh
-        run: |
-          $hash = (Get-FileHash LayoutFixer.exe -Algorithm SHA256).Hash.ToLower()
-          Set-Content -NoNewline SHA256SUMS.txt "$hash  LayoutFixer.exe"
-
-      - name: Commit final repository contents
+      - name: Commit checksum and remove temporary workflow
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -r build_src
           git rm .github/workflows/release.yml
-          git add main.go layoutfixer.ico LayoutFixer.exe SHA256SUMS.txt go.mod rsrc.syso
-          git commit -m "Finalize LayoutFixer v1.0.0"
+          git add SHA256SUMS.txt
+          git commit -m "Verify LayoutFixer v1.0.0 release"
           git push origin main
-
-      - name: Tag v1.0.0
-        shell: pwsh
-        run: |
-          git tag -a v1.0.0 -m "LayoutFixer v1.0.0"
-          git push origin v1.0.0
-
-      - name: Create GitHub release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create v1.0.0 LayoutFixer.exe SHA256SUMS.txt --title "LayoutFixer v1.0.0" --notes-file RELEASE_NOTES_v1.0.0.md
