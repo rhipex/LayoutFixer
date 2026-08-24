@@ -2,16 +2,17 @@
 
 LayoutFixer is a small Windows x64 tray utility that fixes text typed with the wrong English/Russian keyboard layout.
 
-Select the mistyped text and press **Win + Shift** by itself. LayoutFixer converts the selected text and leaves Windows on the target keyboard layout.
+Select the mistyped text and press **Win + Shift** by itself. LayoutFixer converts the selection and leaves Windows on the layout that matches the final converted text.
 
-> **v1.0.0** is the first public release of the internally tested v3 build.
-
-## Example
+## Examples
 
 ```text
 руддщ цщкдв -> hello world
 hello world -> руддщ цщкдв
+руддщ cdtn -> hello свет
 ```
+
+Mixed English/Russian selections are handled per detected text run, so one selection can contain text typed in both wrong layouts.
 
 ## Usage
 
@@ -27,26 +28,31 @@ hello world -> руддщ цщкдв
 - **Run at Windows startup** — toggles launch on sign-in.
 - **Exit** — closes LayoutFixer.
 
-## v1.0.0 highlights
+## v1.0.1 highlights
 
-- Converts selected text between English and Russian keyboard layouts.
-- Keeps Windows on the target keyboard layout after conversion.
+- Mixed-layout conversion: `руддщ cdtn` becomes `hello свет` in one operation.
+- New high-contrast **A / Я** tray icon designed specifically for 16–24 px system-tray sizes.
+- Multi-size icon resources for crisp Windows rendering.
+- Preserves the original whole-selection EN↔RU conversion behavior.
+- Keeps Windows on the layout matching the final converted text.
+
+## Existing behavior
+
 - Handles modifier-only **Win + Shift** separately from normal **Win + Shift + key** shortcuts.
 - Prevents the internal `Ctrl+C` operation from becoming `Ctrl+Shift+C` and accidentally opening browser DevTools.
 - Runs clipboard conversion away from the low-level keyboard-hook thread.
-- Includes a proper **A↔Я** application/tray icon.
 - Detects an already-running instance and shows a warning instead of silently exiting.
 - Optional Windows startup entry from the tray menu.
 
 ## Build from source
 
-Requires Go on Windows (or cross-compilation from another OS).
+Requires Go on Windows (or cross-compilation from another OS). For a basic build:
 
 ```powershell
 go build -ldflags "-H=windowsgui -s -w" -o LayoutFixer.exe main.go
 ```
 
-`main.go` embeds `layoutfixer.ico` for the tray icon. The distributed EXE also contains Windows icon resources for Explorer/application display.
+The release build additionally embeds `layoutfixer.ico` into the Windows executable resources so Explorer and application surfaces use the same icon as the tray app.
 
 ## Requirements
 
@@ -59,4 +65,4 @@ The executable is not code-signed, so Windows may show an **Unknown Publisher** 
 
 ## SHA-256
 
-See `SHA256SUMS.txt` for the checksum of the included executable.
+See `SHA256SUMS.txt` for the checksum of the release executable.
