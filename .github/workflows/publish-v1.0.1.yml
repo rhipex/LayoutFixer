@@ -1,0 +1,79 @@
+name: Publish LayoutFixer v1.0.1
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.pull_request.head.ref == 'release-v1.0.1-trigger'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+
+      - name: Restore exact v1.0.1 source and icon
+        shell: pwsh
+        run: |
+          $parts = 1..8 | ForEach-Object { Get-Content -Raw ("release_src_v1.0.1/main.b64.{0:D2}" -f $_) }
+          $b64 = ($parts -join '').Trim()
+          [IO.File]::WriteAllBytes('main.go', [Convert]::FromBase64String($b64))
+          $sourceHash = (Get-FileHash main.go -Algorithm SHA256).Hash.ToLower()
+          if ($sourceHash -ne '49e65098da0fa25dc31bf57b0edae6100eec9c2ed32934340c570f5ed6fb0442') { throw "Source hash mismatch: $sourceHash" }
+
+          $source = Get-Content -Raw main.go
+          $match = [regex]::Match($source, 'const embeddedIconBase64 = "([A-Za-z0-9+/=]+)"')
+          if (-not $match.Success) { throw 'Embedded icon was not found in source' }
+          [IO.File]::WriteAllBytes('layoutfixer.ico', [Convert]::FromBase64String($match.Groups[1].Value))
+          $iconHash = (Get-FileHash layoutfixer.ico -Algorithm SHA256).Hash.ToLower()
+          if ($iconHash -ne '0cfd53a27e86599481bb829a99068308ff050401b781a373c966251a6b53a01b') { throw "Icon hash mismatch: $iconHash" }
+
+      - name: Build Windows x64 executable with icon
+        shell: pwsh
+        run: |
+          go install github.com/akavel/rsrc@latest
+          & "$env:USERPROFILE\go\bin\rsrc.exe" -ico layoutfixer.ico -o rsrc.syso
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          $env:GO111MODULE = 'off'
+          go build -trimpath -ldflags "-H=windowsgui -s -w" -o LayoutFixer.exe main.go
+          if (-not (Test-Path LayoutFixer.exe)) { throw 'LayoutFixer.exe was not produced' }
+          $hash = (Get-FileHash LayoutFixer.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content SHA256SUMS.txt "$hash  LayoutFixer.exe"
+          Write-Host "LayoutFixer.exe SHA256: $hash"
+
+      - name: Commit v1.0.1 source and executable
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -r release_src_v1.0.1
+          git add main.go layoutfixer.ico LayoutFixer.exe SHA256SUMS.txt rsrc.syso
+          git commit -m "Publish LayoutFixer v1.0.1"
+          git push origin main
+
+      - name: Tag v1.0.1
+        shell: pwsh
+        run: |
+          git tag -a v1.0.1 -m "LayoutFixer v1.0.1"
+          git push origin v1.0.1
+
+      - name: Create v1.0.1 release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.0.1 LayoutFixer.exe SHA256SUMS.txt --title "LayoutFixer v1.0.1" --notes-file RELEASE_NOTES_v1.0.1.md
